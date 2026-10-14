@@ -1,0 +1,7 @@
+.dockerignore
+.gitignore
+.git/
+.venv/
+__pycache__/
+*.md
+*.yaml

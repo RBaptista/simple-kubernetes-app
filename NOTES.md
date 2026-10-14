@@ -60,6 +60,18 @@ Flow: `Dockerfile` → build the image → **get it into the cluster** → Deplo
 - **Ports chain:** Service `port` (ClusterIP) → `targetPort` (the port the app listens on in the container) → `containerPort` in the Deployment (documentation, like `EXPOSE`). `nodePort` is the outer port on the node.
 - **Deployments are for long-running processes.** A script that prints and exits gets restarted forever. For run-once tasks use a **Job**. For a Deployment, the app must keep running (e.g. a web server).
 
+## Writing a good Dockerfile
+
+- **Pin the base image's minor version:** `python:3.14-alpine`, not `python:alpine`. An unpinned tag silently jumps to a new Python version on the next rebuild. Match the version of your local `.venv`.
+- **Base image size:** `python:3.14` ≈ 1 GB (full Debian), `-slim` ≈ 130 MB, `-alpine` ≈ 50 MB. Alpine uses musl instead of glibc, so packages with C extensions sometimes have to compile. Use `-slim` if that happens.
+- **`.dockerignore`** keeps files out of the build context: `.venv/`, `.git/`, `__pycache__/`, `*.md`, `*.yaml`. Without it, `COPY . .` copies all of them into the image.
+- **Layer order for caching:** `COPY requirements.txt` → `pip install` → `COPY . .`. Editing `main.py` then reuses the cached pip layer.
+- **`pip install --no-cache-dir`** keeps pip's download cache out of the image.
+- **Don't run as root:** on Alpine, add `RUN adduser -D app` + `USER app`. Check with `kubectl exec <pod> -- id`.
+- **Why not root:** a container isn't a VM. It shares the host's kernel, and root inside is uid 0 on the host too (no user namespaces by default). If the app is hacked, root can install tools (`apk add`), edit files, and abuse mounted volumes or kernel/runtime bugs to escape to the node (e.g. runc CVE-2019-5736 needed root in the container). Non-root = least privilege, a smaller blast radius. In k8s, `securityContext.runAsNonRoot: true` enforces it, and the "restricted" Pod Security Standard rejects root pods.
+- **`EXPOSE` must match the port the app listens on.** It only documents the port and doesn't publish anything.
+- Result: `hello:v3` 33.3 MB as root → `hello:v4` 25.8 MB as `uid=1000(app)`. Compare sizes with `minikube image ls --format table`.
+
 ## Cleaning up
 
 | Command | What it does |
@@ -141,3 +153,5 @@ Flow: `Dockerfile` → build the image → **get it into the cluster** → Deplo
 - **2026-10-14**: Learned why the NodePort was 31498 (randomly assigned from 30000–32767) and how to pin it with `nodePort:`.
 - **2026-10-14**: API groups: why Service is `v1` (core group) and Deployment is `apps/v1`; `kubectl api-resources` / `api-versions` / `explain`.
 - **2026-10-14**: Reviewed progress so far and created `PRACTICE.md`: 12 levels of hands-on scenarios (config, probes, storage, networking, HPA, scheduling, RBAC, Kustomize/Helm), break-and-fix drills, a capstone and speed drills.
+- **2026-10-14**: PRACTICE 0.2: fixed the Dockerfile (pinned `python:3.14-alpine`, `.dockerignore`, layer order, `--no-cache-dir`, non-root user). Built `hello:v4` (33.3 → 25.8 MB, runs as uid 1000).
+- **2026-10-14**: Why containers shouldn't run as root (shared kernel, uid 0 = host root, container escapes, least privilege).

@@ -30,7 +30,7 @@ Delete all your resources (`kubectl delete deploy,svc --all`). Then, **without o
 `kubectl create deployment hello --image=hello:v3 --replicas=2 --dry-run=client -o yaml` gives you a skeleton. Remember `imagePullPolicy` and `containerPort`. `kubectl create service nodeport --help` exists too.
 </details>
 
-### [ ] 0.2 Fix your own Dockerfile
+### [x] 0.2 Fix your own Dockerfile
 Your current `Dockerfile` has at least **4 problems**. Find and fix them, then build as `hello:v4`.
 
 <details><summary>Hint: what to look at</summary>
