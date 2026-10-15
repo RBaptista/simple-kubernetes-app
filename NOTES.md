@@ -23,6 +23,11 @@
 | `kubectl describe pod <name>` | Full detail plus an **Events** list at the bottom. The first place to look when a Pod isn't Running (pull errors, scheduling, crashes). |
 | `kubectl logs <pod>` | Show the container's stdout/stderr. Add `--previous` for the last crashed run. |
 | `kubectl rollout status deployment/<name>` | Wait for a Deployment's new Pods to become ready. |
+| `kubectl set image deployment/<name> <container>=<img:tag>` | Change a Deployment's image without editing YAML. Triggers a rolling update. The YAML file is now out of date. |
+| `kubectl rollout history deployment/<name>` | List revisions (one per ReplicaSet). Add `--revision=N` to see that revision's image. |
+| `kubectl rollout undo deployment/<name>` | Roll back to the previous revision (`--to-revision=N` to pick one). A rollback becomes a **new** revision number. |
+| `kubectl annotate deployment/<name> kubernetes.io/change-cause="..."` | Fill the CHANGE-CAUSE column in `rollout history` (otherwise `<none>`). |
+| `kubectl apply --dry-run=server -f <file>` | Validate a manifest against the API server without creating anything. Run it after every edit. (`--dry-run=client` only checks locally and catches less.) |
 | `kubectl wait --for=condition=Ready pod/<name> --timeout=120s` | Block until the Pod is ready. |
 
 ## Services (exposing Pods)
@@ -42,6 +47,12 @@
 - **LoadBalancer**: needs a cloud provider to assign an external IP. It stays `<pending>` on minikube until you run `minikube tunnel`.
 
 **Selectors:** a Service finds its Pods through **labels**. `kubectl run nginx-pod` labels the pod `run=nginx-pod`, so a Service with the selector `app=nginx` matches nothing. Check labels with `kubectl get pods --show-labels`.
+
+**Selectors = label queries, used for two jobs:**
+- **Service `selector`** → *where to send traffic*. It's a live query, re-checked constantly, so endpoints follow pods as they come and go.
+- **Deployment `selector.matchLabels`** → *which pods it owns and counts* toward `replicas`. It **must match** `template.metadata.labels`, and it **can't be changed** after the Deployment is created (delete and recreate instead).
+- Deployment and Service never reference each other. The shared label (`app: hello`) is the only link.
+- On the command line: `kubectl get pods -l app=hello`, `kubectl logs -l app=hello`.
 
 ## Running your own image
 
@@ -96,6 +107,9 @@ Flow: `Dockerfile` → build the image → **get it into the cluster** → Deplo
 - **`apiVersion` = `<group>/<version>`.** The API is split into **groups**. The original **core** group has no name, so its kinds are just `v1` (Pod, Service, ConfigMap, Secret, Namespace). Kinds added later live in named groups: `apps/v1` (Deployment, ReplicaSet), `batch/v1` (Job, CronJob), `autoscaling/v2` (HPA), `networking.k8s.io/v1` (Ingress). Versions mature `v1alpha1` → `v1beta1` → `v1`. Look one up with `kubectl api-resources` (APIVERSION column), or `kubectl explain <kind>`.
 - **Control plane / API server**: the "brain" of the cluster. `kubectl` sends every command to the API server, which here is `https://192.168.49.2:8443`.
 
+- **Why a broken rollout doesn't take the app down:** RollingUpdate obeys `maxSurge` (extra pods allowed, **rounded up**) and `maxUnavailable` (working pods that may be removed, **rounded down**). With 3 replicas and the 25% defaults that's surge=1 and unavailable=0, so it adds 1 new pod, waits for it to be **Ready**, and only then removes an old one. A new pod that never becomes Ready stalls the rollout, and the old pods keep serving. A Service only routes to Ready pods.
+- **Ready ≠ working** without a readiness probe. Ready then just means the container started, so an app that starts but returns errors would still finish the rollout and replace every good pod. Probes fix this (PRACTICE 4.1).
+
 ## Troubleshooting
 
 ### `dial tcp 192.168.49.2:8443: connect: no route to host`
@@ -134,6 +148,16 @@ Flow: `Dockerfile` → build the image → **get it into the cluster** → Deplo
 - **Cause:** wrong `apiVersion`. Each kind belongs to an API group: Deployment → `apps/v1`, Service/Pod/ConfigMap → `v1`.
 - **Fix:** `apiVersion: v1`. Look one up with `kubectl api-resources | grep -i <kind>`.
 
+### `cannot unmarshal object into Go struct field ... containers of type []v1.Container`
+- **Cause:** YAML list syntax is broken. `-name: hello` (no space after the dash) is a **key**, not a list item, so `containers` becomes a map instead of a list.
+- **Fix:** write `- name: hello`, then indent the item's other fields (`image`, `ports`) to line up with `name`, not with the dash. `ports` is a list too: `- containerPort: 5000`.
+- **Spot it:** `[]` in the error = expected a list. `kubectl explain <path>` shows `<[]Object>` for list fields.
+
+### Two Deployments with the same selector
+- **Cause:** a second Deployment reused `app: hello` while the old `hello` Deployment was still running.
+- **Effect:** a Service selecting `app=hello` routes to the pods of **both**, mixing versions. Overlapping selectors are an anti-pattern.
+- **Fix:** delete the old Deployment, or give the new one its own label.
+
 ### Pod in `CrashLoopBackOff` but the logs look fine
 - **Cause:** the container exits (even successfully), and a Deployment always restarts it, backing off longer each time.
 - **Fix:** check `kubectl logs <pod>`. If it's a one-shot script, run it as a Job. Otherwise, make the process keep running.
@@ -155,3 +179,6 @@ Flow: `Dockerfile` → build the image → **get it into the cluster** → Deplo
 - **2026-10-14**: Reviewed progress so far and created `PRACTICE.md`: 12 levels of hands-on scenarios (config, probes, storage, networking, HPA, scheduling, RBAC, Kustomize/Helm), break-and-fix drills, a capstone and speed drills.
 - **2026-10-14**: PRACTICE 0.2: fixed the Dockerfile (pinned `python:3.14-alpine`, `.dockerignore`, layer order, `--no-cache-dir`, non-root user). Built `hello:v4` (33.3 → 25.8 MB, runs as uid 1000).
 - **2026-10-14**: Why containers shouldn't run as root (shared kernel, uid 0 = host root, container escapes, least privilege).
+- **2026-10-14**: Selectors: Service selector (traffic routing, live query) vs Deployment selector (ownership/counting, must match template labels, can't be changed); `-l` on the command line.
+- **2026-10-14**: Reviewed `helloDeploy.yaml`: YAML list syntax (`- ` needs a space, align fields with `name`, `ports` is a list), `kubectl apply --dry-run=server`, missing image tag `v5`, overlapping selectors with the old `hello` Deployment.
+- **2026-10-15**: PRACTICE 1.1 checked: `set image` v6→v7, broken `hello:doesnotexist` rollout stalled at 1 bad pod while 3 v7 pods kept serving, rolled back. History shows revisions 3–5. Explained why traffic kept flowing (maxSurge/maxUnavailable rounding, readiness). 1.1 done.

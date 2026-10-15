@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hello
+  name: hello-deploy
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: hello
@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: hello
-          image: hello:v3
+          image: hello:v6
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
